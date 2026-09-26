@@ -1,0 +1,9 @@
+# Ignore sensitive credential files
+.ictfax-credentials
+*.env
+
+# Ignore temporary and editor files
+tmp/
+*.swp
+*.tmp
+.DS_Store
