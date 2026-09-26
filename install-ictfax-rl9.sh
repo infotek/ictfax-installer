@@ -1,7 +1,10 @@
 #!/usr/bin/env sh
-# ICTFax & ICTCore Universal One-Line Installer
+# ICTFax & ICTCore One-Line Installer https://www.ictfax.org/
+# This exist for automated testing mostly because the documentation did not work
+# ICT does not seem to be testing on 8, i think 8 requires a special mysql repo added
 # Target OS: Enterprise Linux 8 & 9 (Rocky Linux, AlmaLinux, RHEL)
-# Version:   1.3.0
+# 
+# Version:   1.3.1
 #
 # Flexible Configuration Priority:
 #   1. Pre-populated local file: ./.ictfax-credentials
