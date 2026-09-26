@@ -1,25 +1,20 @@
 #!/usr/bin/env sh
 # ICTFax & ICTCore Universal One-Line Installer
 # Target OS: Enterprise Linux 8 & 9 (Rocky Linux, AlmaLinux, RHEL)
-# Version:   1.2.5
+# Version:   1.3.0
 #
-# log for ict with:
-#   script log_$(date +%Y%m%d%H%M)
+# Flexible Configuration Priority:
+#   1. Pre-populated local file: ./.ictfax-credentials
+#   2. Environment variables:    FAX_DOMAIN="fax.example.com" DB_PASS="custom" ./install-ictfax.sh
+#   3. Automatic defaults:      Auto-generated passwords and hostname resolution
 #
 # Note:
-#   Fully aligned with ICTFax's updated installation guide (September 2026).
-#
-# Usage:
-#   chmod +x install-ictfax.sh
-#   ./install-ictfax.sh
-#
-# Optional Environment Overrides:
-#   ICTFAX_DOMAIN="fax.example.com" ICTFAX_DB_PASS="custom_pass" ./install-ictfax.sh
+#   Root execution caches state to /root/.ictfax-credentials for failure recovery.
 
 set -eu
 
 # Script Versioning
-SCRIPT_VERSION="1.2.5"
+SCRIPT_VERSION="1.3.0"
 
 # Color-coded log helper functions
 info()  { printf "\033[34m[INFO]\033[0m %s\n" "$1"; }
@@ -29,7 +24,32 @@ error() { printf "\033[31m[ERROR]\033[0m %s\n" "$1" >&2; }
 main() {
   info "Starting ICTFax & ICTCore installer v${SCRIPT_VERSION}..."
 
-  # 1. Privilege Check & Sudo Resolution
+  # =========================================================================
+  # 1. Configuration Defaults & Local Credential Resolution
+  # =========================================================================
+  LOCAL_CRED_FILE="./.ictfax-credentials"
+  ROOT_CRED_FILE="/root/.ictfax-credentials"
+
+  # Source local credential file first if present in current execution path
+  if [ -f "$LOCAL_CRED_FILE" ]; then
+    info "Loading configuration from local state file ($LOCAL_CRED_FILE)..."
+    . "$LOCAL_CRED_FILE"
+  fi
+
+  # Resolve Identity & Default Fallbacks (Inline Env Vars override defaults)
+  FAX_DOMAIN="${FAX_DOMAIN:-$(hostname -f 2>/dev/null || hostname 2>/dev/null || echo "localhost")}"
+  PRIMARY_IP="${PRIMARY_IP:-$(ip route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}' || echo "127.0.0.1")}"
+
+  DB_NAME="${DB_NAME:-ictfax}"
+  DB_USER="${DB_USER:-ictfaxuser}"
+  DB_PASS="${DB_PASS:-$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 24)}"
+
+  ADMIN_PASS="${ADMIN_PASS:-$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 16)}"
+  USER_PASS="${USER_PASS:-$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 16)}"
+
+  # =========================================================================
+  # 2. Privilege Check & Sudo Resolution
+  # =========================================================================
   SUDO=""
   if [ "$(id -u)" -ne 0 ]; then
     if command -v sudo >/dev/null 2>&1; then
@@ -40,9 +60,11 @@ main() {
     fi
   fi
 
-  # 2. Setup Temporary Working Directory & State-Aware Failure Trap
+  # =========================================================================
+  # 3. Setup Temporary Working Directory & State-Aware Failure Trap
+  # =========================================================================
   TMP_DIR="$(${SUDO} mktemp -d)"
-  
+
   cleanup() {
     EXIT_CODE=$?
     if [ "$EXIT_CODE" -ne 0 ]; then
@@ -50,14 +72,11 @@ main() {
       printf "\033[41;37m  [FATAL ERROR] Installation (v%s) aborted on line %-4s         \033[0m\n" "$SCRIPT_VERSION" "${1:-unknown}" >&2
       printf "\033[41;37m  Exit Code: %-5s                                              \033[0m\n" "$EXIT_CODE" >&2
       printf "\033[41;37m                                                                \033[0m\n" >&2
-      if [ -f "/root/.ictfax-credentials" ]; then
-        printf "\033[41;37m  Credentials Saved to /root/.ictfax-credentials:             \033[0m\n" >&2
-        . /root/.ictfax-credentials
-        printf "\033[41;37m    DB Pass    : %-42s \033[0m\n" "${DB_PASS:-N/A}" >&2
-        printf "\033[41;37m    Admin Pass : %-42s \033[0m\n" "${ADMIN_PASS:-N/A}" >&2
-        printf "\033[41;37m    Demo Pass  : %-42s \033[0m\n" "${USER_PASS:-N/A}" >&2
-        printf "\033[41;37m                                                                \033[0m\n" >&2
-      fi
+      printf "\033[41;37m  Active Configuration State:                                   \033[0m\n" >&2
+      printf "\033[41;37m    Domain     : %-42s \033[0m\n" "${FAX_DOMAIN:-N/A}" >&2
+      printf "\033[41;37m    DB Pass    : %-42s \033[0m\n" "${DB_PASS:-N/A}" >&2
+      printf "\033[41;37m    Admin Pass : %-42s \033[0m\n" "${ADMIN_PASS:-N/A}" >&2
+      printf "\033[41;37m    Demo Pass  : %-42s \033[0m\n" "${USER_PASS:-N/A}" >&2
       printf "\033[41;37m                                                                \033[0m\n\n" >&2
     fi
     info "Cleaning up temporary files..."
@@ -66,7 +85,22 @@ main() {
   trap 'cleanup $LINENO' EXIT
   trap 'exit 130' INT TERM
 
-  # 3. Detect EL OS Version
+  # Persist resolved active credentials to /root/.ictfax-credentials with strict permissions
+  ${SUDO} touch "$ROOT_CRED_FILE"
+  ${SUDO} chmod 600 "$ROOT_CRED_FILE"
+  cat <<EOF | ${SUDO} tee "$ROOT_CRED_FILE" >/dev/null
+FAX_DOMAIN="${FAX_DOMAIN}"
+PRIMARY_IP="${PRIMARY_IP}"
+DB_NAME="${DB_NAME}"
+DB_USER="${DB_USER}"
+DB_PASS="${DB_PASS}"
+ADMIN_PASS="${ADMIN_PASS}"
+USER_PASS="${USER_PASS}"
+EOF
+
+  # =========================================================================
+  # 4. OS Version Detection
+  # =========================================================================
   if [ -f /etc/os-release ]; then
     . /etc/os-release
     EL_VER="${VERSION_ID%%.*}"
@@ -82,34 +116,9 @@ main() {
 
   info "Target System: Enterprise Linux ${EL_VER}"
 
-  # 4. Dynamic Configuration & Early Secret Persistence
-  DB_NAME="${ICTFAX_DB_NAME:-ictfax}"
-  DB_USER="${ICTFAX_DB_USER:-ictfaxuser}"
-  FAX_DOMAIN="${ICTFAX_DOMAIN:-$(hostname -f 2>/dev/null || hostname 2>/dev/null || echo "localhost")}"
-  PRIMARY_IP=$(ip route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}' || echo "127.0.0.1")
-
-  CRED_FILE="/root/.ictfax-credentials"
-  if [ -f "$CRED_FILE" ]; then
-    info "Loading pre-existing credential state from $CRED_FILE..."
-    . "$CRED_FILE"
-  else
-    info "Generating and persisting secure random credentials to $CRED_FILE..."
-    DB_PASS="${ICTFAX_DB_PASS:-$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 24)}"
-    ADMIN_PASS=$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 16)
-    USER_PASS=$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 16)
-
-    ${SUDO} touch "$CRED_FILE"
-    ${SUDO} chmod 600 "$CRED_FILE"
-    cat <<EOF | ${SUDO} tee "$CRED_FILE" >/dev/null
-DB_NAME="${DB_NAME}"
-DB_USER="${DB_USER}"
-DB_PASS="${DB_PASS}"
-ADMIN_PASS="${ADMIN_PASS}"
-USER_PASS="${USER_PASS}"
-EOF
-  fi
-
+  # =========================================================================
   # 5. Enable Repositories
+  # =========================================================================
   info "Enabling EPEL, Remi, and ICTCore repositories for EL${EL_VER}..."
   ${SUDO} dnf install -y epel-release dnf-utils
   ${SUDO} dnf install -y "http://rpms.remirepo.net/enterprise/remi-release-${EL_VER}.rpm"
@@ -122,7 +131,9 @@ EOF
     ${SUDO} dnf config-manager --set-enabled powertools || ${SUDO} dnf config-manager --set-enabled PowerTools || true
   fi
 
+  # =========================================================================
   # 6. Configure PHP & MariaDB Modules
+  # =========================================================================
   info "Configuring PHP 8.3 and MariaDB modules..."
   ${SUDO} dnf module reset php -y
   ${SUDO} dnf module enable php:remi-8.3 -y
@@ -131,7 +142,9 @@ EOF
     ${SUDO} dnf module enable mariadb:10.11 -y
   fi
 
+  # =========================================================================
   # 7. Install PHP Mcrypt Extension (PECL)
+  # =========================================================================
   info "Installing PHP Mcrypt extension..."
   ${SUDO} dnf install --enablerepo=epel -y php-devel php-pear libmcrypt libmcrypt-devel
   printf "\n" | ${SUDO} pecl install mcrypt || true
@@ -140,19 +153,25 @@ EOF
     echo "extension=mcrypt.so" | ${SUDO} tee /etc/php.d/mcrypt.ini > /dev/null
   fi
 
-  # 8. Install Software Packages
+  # =========================================================================
+  # 8. Install Packages
+  # =========================================================================
   info "Installing ICTCore, ICTFax, and dependent packages..."
   ${SUDO} dnf install -y php php-fpm php-gd php-mysqlnd mariadb-server mariadb libtiff-tools mod_ssl ictcore ictcore-email ictcore-freeswitch ictcore-fax ictcore-sendmail ictfax
   ${SUDO} systemctl enable --now mariadb
 
+  # =========================================================================
   # 9. Configure Apache MPM Mode (prefork)
+  # =========================================================================
   info "Configuring Apache MPM prefork mode..."
   if [ -f /etc/httpd/conf.modules.d/00-mpm.conf ]; then
     ${SUDO} sed -i 's/^\s*\(LoadModule\s\+mpm_event_module\s\+modules\/mod_mpm_event\.so\)/# \1/' /etc/httpd/conf.modules.d/00-mpm.conf
     ${SUDO} sed -i 's/^\s*#\s*\(LoadModule\s\+mpm_prefork_module\s\+modules\/mod_mpm_prefork\.so\)/\1/' /etc/httpd/conf.modules.d/00-mpm.conf
   fi
 
+  # =========================================================================
   # 10. Initialize Database & Run SQL Schema Imports
+  # =========================================================================
   info "Checking database state..."
   if ${SUDO} mysql -u root -e "USE ${DB_NAME};" >/dev/null 2>&1; then
     error "Database '${DB_NAME}' already exists!"
@@ -185,14 +204,18 @@ EOF
     fi
   done
 
-  # 11. Apply Persisted Credentials to Database Web Accounts
+  # =========================================================================
+  # 11. Apply Credentials to Database Web Accounts
+  # =========================================================================
   info "Applying generated passwords to database..."
   ${SUDO} mysql -u root "$DB_NAME" <<EOF
 UPDATE usr SET passwd = MD5('${ADMIN_PASS}') WHERE username = 'admin';
 UPDATE usr SET passwd = MD5('${USER_PASS}') WHERE username = 'user';
 EOF
 
+  # =========================================================================
   # 12. Update ICTCore Configuration File
+  # =========================================================================
   info "Updating /etc/ictcore.conf..."
   if [ -f /etc/ictcore.conf ]; then
     ${SUDO} sed -i "s/^\s*user\s*=.*/user = ${DB_USER}/" /etc/ictcore.conf
@@ -200,7 +223,9 @@ EOF
     ${SUDO} sed -i "s/^\s*name\s*=.*/name = ${DB_NAME}/" /etc/ictcore.conf
   fi
 
-  # 13. Ensure Default SSL Certificates Exist via Native Installed mod_ssl Helper
+  # =========================================================================
+  # 13. Ensure Default SSL Certificates Exist via Installed mod_ssl Helper
+  # =========================================================================
   if [ ! -f /etc/pki/tls/certs/localhost.crt ] || [ ! -f /etc/pki/tls/private/localhost.key ]; then
     info "Generating default SSL certificates via /usr/libexec/httpd-ssl-gencerts..."
     if [ -x /usr/libexec/httpd-ssl-gencerts ]; then
@@ -208,7 +233,9 @@ EOF
     fi
   fi
 
+  # =========================================================================
   # 14. Configure Apache SSL/TLS VirtualHost
+  # =========================================================================
   info "Configuring Apache SSL/TLS VirtualHost for ${FAX_DOMAIN}..."
 
   cat <<EOF | ${SUDO} tee "/etc/httpd/conf.d/${FAX_DOMAIN}.conf" > /dev/null
@@ -264,7 +291,9 @@ EOF
 
   ${SUDO} apachectl configtest
 
+  # =========================================================================
   # 15. Sendmail Integration & Web Services Startup
+  # =========================================================================
   info "Configuring Sendmail integrations..."
   echo "ictcore" | ${SUDO} tee -a /etc/mail/trusted-users > /dev/null
   echo "apache"  | ${SUDO} tee -a /etc/mail/trusted-users > /dev/null
@@ -298,7 +327,7 @@ EOF
   info "   Demo User  : user@ictcore.org"
   info "   Demo Pass  : ${USER_PASS}"
   info ""
-  info " Credentials cached at: /root/.ictfax-credentials"
+  info " State saved at: ${ROOT_CRED_FILE}"
   info " To issue a Let's Encrypt certificate later:"
   info "   sudo certbot --apache -d ${FAX_DOMAIN}"
   info "=================================================="
