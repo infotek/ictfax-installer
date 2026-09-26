@@ -4,11 +4,11 @@
 # ICT does not seem to be testing on 8, i think 8 requires a special mysql repo added
 # Target OS: Enterprise Linux 8 & 9 (Rocky Linux, AlmaLinux, RHEL)
 # 
-# Version:   1.3.1
+# Version:   1.3.2
 #
 # Flexible Configuration Priority:
 #   1. Pre-populated local file: ./.ictfax-credentials
-#   2. Environment variables:    FAX_DOMAIN="fax.example.com" DB_PASS="custom" ./install-ictfax.sh
+#   2. Environment variables:    FAX_DOMAIN="fax.example.com" DB_PASS="custom" ./install-ictfax-rl9.sh
 #   3. Automatic defaults:      Auto-generated passwords and hostname resolution
 #
 # Note:
@@ -17,7 +17,7 @@
 set -eu
 
 # Script Versioning
-SCRIPT_VERSION="1.3.0"
+SCRIPT_VERSION="1.3.2"
 
 # Color-coded log helper functions
 info()  { printf "\033[34m[INFO]\033[0m %s\n" "$1"; }
@@ -132,6 +132,16 @@ EOF
   elif [ "$EL_VER" -eq 8 ]; then
     ${SUDO} dnf install -y https://service.ictinnovations.com/repo/8/ict-release-8-5.el8.noarch.rpm
     ${SUDO} dnf config-manager --set-enabled powertools || ${SUDO} dnf config-manager --set-enabled PowerTools || true
+
+    # Inject upstream MariaDB 10.11 repository with module hotfix override for EL8
+    cat <<EOF | ${SUDO} tee /etc/yum.repos.d/MariaDB.repo > /dev/null
+[mariadb]
+name = MariaDB
+baseurl = http://yum.mariadb.org/10.11/rhel8-amd64
+gpgkey=https://yum.mariadb.org/RPM-GPG-KEY-MariaDB
+gpgcheck=1
+module_hotfixes=1
+EOF
   fi
 
   # =========================================================================
@@ -160,7 +170,11 @@ EOF
   # 8. Install Packages
   # =========================================================================
   info "Installing ICTCore, ICTFax, and dependent packages..."
-  ${SUDO} dnf install -y php php-fpm php-gd php-mysqlnd mariadb-server mariadb libtiff-tools mod_ssl ictcore ictcore-email ictcore-freeswitch ictcore-fax ictcore-sendmail ictfax
+  if [ "$EL_VER" -eq 8 ]; then
+    ${SUDO} dnf install -y php php-fpm php-gd php-mysqlnd MariaDB-server MariaDB-client libtiff-tools mod_ssl ictcore ictcore-email ictcore-freeswitch ictcore-fax ictcore-sendmail ictfax
+  else
+    ${SUDO} dnf install -y php php-fpm php-gd php-mysqlnd mariadb-server mariadb libtiff-tools mod_ssl ictcore ictcore-email ictcore-freeswitch ictcore-fax ictcore-sendmail ictfax
+  fi
   ${SUDO} systemctl enable --now mariadb
 
   # =========================================================================
